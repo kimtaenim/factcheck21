@@ -49,7 +49,7 @@ export function CopyButton({ text, label = "복사", copiedLabel = "복사됨", 
       className={cn(
         "inline-flex items-center gap-1.5 font-medium transition active:scale-[0.97] disabled:opacity-40",
         copied
-          ? "bg-blue-600 text-white"
+          ? "bg-mint-600 text-white"
           : "bg-zinc-50 text-zinc-600 ring-1 ring-zinc-200 hover:text-zinc-900 hover:ring-zinc-300",
         sizeCls,
         className,

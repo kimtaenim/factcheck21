@@ -1,23 +1,36 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { CopyButton } from "@/components/CopyButton";
+import { FactMarkdown } from "@/components/FactMarkdown";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
-import type { RecentSummary } from "@/lib/types";
+import type { FactcheckCost, RecentSummary } from "@/lib/types";
 
 const DRAFT_KEY = "factcheck:draft";
 
+interface DoneResult {
+  id: string;
+  title: string;
+  markdown: string;
+  retried: boolean;
+  cost: FactcheckCost;
+}
+
 export default function HomePage() {
-  const router = useRouter();
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
   const [hydrated, setHydrated] = useState(false);
   const [running, setRunning] = useState(false);
+  const [status, setStatus] = useState("");
+  const [live, setLive] = useState("");
+  const [result, setResult] = useState<DoneResult | null>(null);
+  const [shareUrl, setShareUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<RecentSummary[]>([]);
+  const liveRef = useRef<HTMLDivElement>(null);
 
   const refreshRecent = useCallback(async () => {
     const res = await fetch("/api/recent", { cache: "no-store" });
@@ -46,26 +59,91 @@ export default function HomePage() {
     refreshRecent();
   }, [refreshRecent]);
 
+  useEffect(() => {
+    if (running && liveRef.current) {
+      liveRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [live, running]);
+
   const run = async () => {
     if (!text.trim() || running) return;
     setRunning(true);
     setError(null);
+    setStatus("시작하는 중…");
+    setLive("");
+    setResult(null);
+    setShareUrl("");
     try {
       const res = await fetch("/api/factcheck", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: text.trim(), title: title.trim() || undefined }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error || "팩트체크에 실패했습니다.");
-        setRunning(false);
+      if (!res.ok || !res.body) {
+        let msg = "팩트체크에 실패했습니다.";
+        try {
+          const j = await res.json();
+          if (j?.error) msg = j.error;
+        } catch {}
+        setError(msg);
         return;
       }
-      router.push(`/result/${data.id}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let buf = "";
+      let acc = "";
+
+      const handle = (obj: Record<string, unknown>) => {
+        switch (obj.type) {
+          case "status":
+            setStatus(String(obj.text ?? ""));
+            break;
+          case "delta":
+            acc += String(obj.text ?? "");
+            setLive(acc);
+            break;
+          case "error":
+            setError(String(obj.error ?? "오류가 발생했습니다."));
+            break;
+          case "done":
+            setResult({
+              id: String(obj.id),
+              title: String(obj.title),
+              markdown: String(obj.markdown),
+              retried: Boolean(obj.retried),
+              cost: obj.cost as FactcheckCost,
+            });
+            setShareUrl(`${window.location.origin}/result/${obj.id}`);
+            refreshRecent();
+            break;
+        }
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let nl: number;
+        while ((nl = buf.indexOf("\n")) !== -1) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          try {
+            handle(JSON.parse(line));
+          } catch {}
+        }
+      }
+      if (buf.trim()) {
+        try {
+          handle(JSON.parse(buf.trim()));
+        } catch {}
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "네트워크 오류");
+    } finally {
       setRunning(false);
+      setStatus("");
     }
   };
 
@@ -76,12 +154,14 @@ export default function HomePage() {
     if (!res.ok) setRecent(before);
   };
 
+  const showPanel = running || !!result;
+
   return (
     <>
       <header className="sticky top-0 z-20 border-b border-zinc-200/70 bg-white/80 backdrop-blur-md">
         <div className="mx-auto flex max-w-2xl items-center justify-between px-5 py-3 sm:px-6">
           <div>
-            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-400">
+            <p className="text-[10px] font-medium uppercase tracking-[0.18em] text-mint-600">
               FACTCHECK
             </p>
             <h1 className="text-[15px] font-semibold tracking-tight text-zinc-900">
@@ -124,14 +204,14 @@ export default function HomePage() {
           </Card>
         </section>
 
-        <section className="mb-10">
+        <section className="mb-6">
           <button
             type="button"
             onClick={run}
             disabled={!text.trim() || running}
-            className="w-full rounded-3xl bg-blue-600 px-6 py-5 text-[16px] font-medium text-white shadow-soft transition active:scale-[0.99] disabled:opacity-50 sm:text-[17px]"
+            className="w-full rounded-3xl bg-mint-400 px-6 py-5 text-[16px] font-medium text-white shadow-soft transition active:scale-[0.99] disabled:opacity-50 sm:text-[17px]"
           >
-            {running ? "검증 중… (웹 검색 포함, 1~2분 소요)" : "팩트체크 실행"}
+            {running ? "검증 중…" : "팩트체크 실행"}
           </button>
           {error && (
             <p className="mt-3 text-center text-[13px] text-red-600">{error}</p>
@@ -140,6 +220,47 @@ export default function HomePage() {
             웹 검색 + Haiku/Sonnet 호출. 환율 1 USD = ₩1,400 기준 비용 표시.
           </p>
         </section>
+
+        {showPanel && (
+          <section ref={liveRef} className="mb-10">
+            <Card padding="lg">
+              {running && (
+                <p className="mb-4 flex items-center gap-2 text-[13px] font-medium text-mint-700">
+                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-mint-500" />
+                  {status || "처리 중…"}
+                </p>
+              )}
+
+              {result ? (
+                <>
+                  <div className="mb-4 flex flex-wrap items-center gap-2">
+                    {result.retried && (
+                      <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[11px] text-amber-700">
+                        추가 검증 포함
+                      </span>
+                    )}
+                    <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-500">
+                      ₩{result.cost.cost_krw.toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="mb-5 flex flex-wrap gap-2">
+                    <CopyButton text={shareUrl} label="링크 복사" copiedLabel="링크 복사됨" size="md" />
+                    <CopyButton text={result.markdown} label="본문 복사" size="md" />
+                    <Link
+                      href={`/result/${result.id}`}
+                      className="inline-flex items-center gap-1.5 rounded-2xl bg-zinc-50 px-4 py-2 text-[13px] font-medium text-zinc-600 ring-1 ring-zinc-200 transition hover:text-zinc-900 hover:ring-zinc-300"
+                    >
+                      전체 페이지 열기
+                    </Link>
+                  </div>
+                  <FactMarkdown markdown={result.markdown} />
+                </>
+              ) : (
+                live && <FactMarkdown markdown={live} />
+              )}
+            </Card>
+          </section>
+        )}
 
         <section>
           <h2 className="mb-3 px-1 text-[12px] font-medium uppercase tracking-wider text-zinc-500">

@@ -100,6 +100,101 @@ async function callClaude(
     .join("");
 }
 
+async function callClaudeStream(
+  apiKey: string,
+  model: string,
+  system: string,
+  userMessage: string,
+  maxTokens: number,
+  acc: CostAccumulator,
+  onTextDelta: (text: string) => void,
+  tools?: unknown[],
+): Promise<string> {
+  const body: Record<string, unknown> = {
+    model,
+    max_tokens: maxTokens,
+    stream: true,
+    system,
+    messages: [{ role: "user", content: userMessage }],
+  };
+  if (tools) body.tools = tools;
+
+  const resp = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!resp.ok || !resp.body) {
+    let errText = `Anthropic ${resp.status}`;
+    try {
+      const j = await resp.json();
+      if (j?.error?.message) errText = j.error.message;
+    } catch {}
+    throw new Error(errText);
+  }
+
+  const reader = resp.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let sseBuf = "";
+  let full = "";
+  let inTok = 0;
+  let outTok = 0;
+  let webReq = 0;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    sseBuf += decoder.decode(value, { stream: true });
+    let idx: number;
+    while ((idx = sseBuf.indexOf("\n\n")) !== -1) {
+      const rawEvent = sseBuf.slice(0, idx);
+      sseBuf = sseBuf.slice(idx + 2);
+      const dataLine = rawEvent.split("\n").find((l) => l.startsWith("data:"));
+      if (!dataLine) continue;
+      const dataStr = dataLine.slice(5).trim();
+      if (!dataStr) continue;
+      let p: {
+        type?: string;
+        delta?: { type?: string; text?: string };
+        message?: { usage?: ClaudeUsage };
+        usage?: ClaudeUsage;
+      };
+      try {
+        p = JSON.parse(dataStr);
+      } catch {
+        continue;
+      }
+      if (p.type === "content_block_delta" && p.delta?.type === "text_delta") {
+        const t = p.delta.text || "";
+        if (t) {
+          full += t;
+          onTextDelta(t);
+        }
+      } else if (p.type === "message_start" && p.message?.usage) {
+        inTok = p.message.usage.input_tokens ?? 0;
+        outTok = p.message.usage.output_tokens ?? 0;
+      } else if (p.type === "message_delta" && p.usage) {
+        if (typeof p.usage.output_tokens === "number") outTok = p.usage.output_tokens;
+        const w = p.usage.server_tool_use?.web_search_requests;
+        if (typeof w === "number") webReq = w;
+      }
+    }
+  }
+
+  const price = PRICE[model] ?? { in: 0, out: 0 };
+  acc.input_tokens += inTok;
+  acc.output_tokens += outTok;
+  acc.usd += (inTok * price.in + outTok * price.out) / 1_000_000;
+  acc.usd += webReq * WEB_SEARCH_USD;
+
+  return full;
+}
+
 const webSearchTool = (maxUses: number) => [
   {
     type: "web_search_20250305",
@@ -115,7 +210,16 @@ export interface FactcheckResult {
   cost: { input_tokens: number; output_tokens: number; cost_usd: number; cost_krw: number };
 }
 
-export async function runFactcheck(text: string, title: string): Promise<FactcheckResult> {
+export interface StreamHandlers {
+  onStatus: (text: string) => void;
+  onDelta: (text: string) => void;
+}
+
+export async function runFactcheckStream(
+  text: string,
+  title: string,
+  h: StreamHandlers,
+): Promise<FactcheckResult> {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY 미설정");
 
@@ -123,6 +227,7 @@ export async function runFactcheck(text: string, title: string): Promise<Factche
   const acc: CostAccumulator = { usd: 0, input_tokens: 0, output_tokens: 0 };
 
   // 1단계: 팩트 추출 + 웹 검색 검증 (Haiku)
+  h.onStatus("웹에서 사실 확인 중…");
   const raw = await callClaude(
     apiKey,
     HAIKU,
@@ -133,14 +238,16 @@ export async function runFactcheck(text: string, title: string): Promise<Factche
     webSearchTool(3),
   );
 
-  // 2단계: 결과 정리 (Sonnet)
-  let markdown = await callClaude(
+  // 2단계: 결과 정리 (Sonnet, 스트리밍)
+  h.onStatus("결과 정리 중…");
+  let markdown = await callClaudeStream(
     apiKey,
     SONNET,
     FACTCHECK_FORMAT_SYSTEM,
     `"## ${heading}"를 제목으로 다음 팩트체크 결과를 정리해주십시오:\n\n${raw}`,
     8000,
     acc,
+    h.onDelta,
   );
 
   // 3단계: "확인 필요" 항목 1회 추가 검증
@@ -151,6 +258,7 @@ export async function runFactcheck(text: string, title: string): Promise<Factche
     .join("\n");
 
   if (unverified.trim()) {
+    h.onStatus("'확인 필요' 항목 추가 검증 중…");
     const retryRaw = await callClaude(
       apiKey,
       HAIKU,
@@ -160,13 +268,16 @@ export async function runFactcheck(text: string, title: string): Promise<Factche
       acc,
       webSearchTool(5),
     );
-    const retryFmt = await callClaude(
+    h.onStatus("추가 검증 결과 정리 중…");
+    h.onDelta("\n\n");
+    const retryFmt = await callClaudeStream(
       apiKey,
       SONNET,
       FACTCHECK_FORMAT_SYSTEM,
       `"## 추가 검증 결과"를 제목으로 다음 팩트체크 결과를 정리해주십시오:\n\n${retryRaw}`,
       8000,
       acc,
+      h.onDelta,
     );
     markdown = `${markdown}\n\n${retryFmt}`;
     retried = true;
