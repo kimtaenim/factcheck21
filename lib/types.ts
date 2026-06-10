@@ -13,6 +13,7 @@ export interface FactcheckRecord {
   dateKst: string;
   timeKst: string;
   retried: boolean;
+  synthesized?: boolean;
   cost: FactcheckCost;
 }
 

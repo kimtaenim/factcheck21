@@ -58,6 +58,21 @@ export async function saveFactcheck(record: FactcheckRecord): Promise<void> {
   while (memOrder.length > MAX_HISTORY) memOrder.pop();
 }
 
+export async function updateFactcheck(record: FactcheckRecord): Promise<void> {
+  const r = getRedis();
+  const summary = toSummary(record);
+  if (r) {
+    await r.set(recordKey(record.id), JSON.stringify(record), { ex: TTL_SECONDS });
+    const list = (await r.lrange(recentKey, 0, MAX_HISTORY - 1)) as Array<string | RecentSummary>;
+    const idx = list
+      .map((v) => (typeof v === "string" ? (JSON.parse(v) as RecentSummary) : v))
+      .findIndex((s) => s.id === record.id);
+    if (idx >= 0) await r.lset(recentKey, idx, JSON.stringify(summary));
+    return;
+  }
+  if (memRecords.has(record.id)) memRecords.set(record.id, record);
+}
+
 export async function loadFactcheck(id: string): Promise<FactcheckRecord | null> {
   const r = getRedis();
   if (r) {

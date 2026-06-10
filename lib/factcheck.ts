@@ -104,7 +104,7 @@ async function callClaudeStream(
   apiKey: string,
   model: string,
   system: string,
-  userMessage: string,
+  messages: { role: string; content: string }[],
   maxTokens: number,
   acc: CostAccumulator,
   onTextDelta: (text: string) => void,
@@ -115,7 +115,7 @@ async function callClaudeStream(
     max_tokens: maxTokens,
     stream: true,
     system,
-    messages: [{ role: "user", content: userMessage }],
+    messages,
   };
   if (tools) body.tools = tools;
 
@@ -244,7 +244,7 @@ export async function runFactcheckStream(
     apiKey,
     SONNET,
     FACTCHECK_FORMAT_SYSTEM,
-    `"## ${heading}"를 제목으로 다음 팩트체크 결과를 정리해주십시오:\n\n${raw}`,
+    [{ role: "user", content: `"## ${heading}"를 제목으로 다음 팩트체크 결과를 정리해주십시오:\n\n${raw}` }],
     8000,
     acc,
     h.onDelta,
@@ -274,7 +274,7 @@ export async function runFactcheckStream(
       apiKey,
       SONNET,
       FACTCHECK_FORMAT_SYSTEM,
-      `"## 추가 검증 결과"를 제목으로 다음 팩트체크 결과를 정리해주십시오:\n\n${retryRaw}`,
+      [{ role: "user", content: `"## 추가 검증 결과"를 제목으로 다음 팩트체크 결과를 정리해주십시오:\n\n${retryRaw}` }],
       8000,
       acc,
       h.onDelta,
@@ -286,6 +286,122 @@ export async function runFactcheckStream(
   return {
     markdown: sanitizeBlockedSources(markdown),
     retried,
+    cost: {
+      input_tokens: acc.input_tokens,
+      output_tokens: acc.output_tokens,
+      cost_usd: +acc.usd.toFixed(4),
+      cost_krw: Math.round(acc.usd * 1400),
+    },
+  };
+}
+
+const CHAT_SYSTEM = `당신은 원고 팩트체크를 돕는 대화형 어시스턴트입니다. 아래에 원본 원고와 1차 팩트체크 결과가 주어집니다. 사용자가 추가로 묻는 사실·주장에 대해 web_search로 검증하고 답하십시오.
+
+절대 규칙:
+- 모든 출력은 반드시 한국어로 작성. 외국어 원문 그대로 출력 금지. 고유명사만 원어 병기 가능.
+- "미확인" 사용 금지. 확인 안 되면 "확인 필요"로 쓸 것.
+- 마크다운 표 절대 사용 금지. 목록이나 문단으로 정리.
+
+검색·출처 규칙:
+- 새로운 사실 주장은 web_search로 검증. 검색어는 영어로 작성하되 결과는 한국어로 번역.
+- 출처 우선순위: 1차 출처(정부·공식기관·통계·논문) > 주요 언론사 > 영어판 위키피디아.
+- 다음 출처는 절대 사용 금지: 나무위키(namu.wiki), 네이버 블로그·포스트·카페·지식iN, 다음 카페·블로그, 그 밖의 개인 블로그·위키 미러 사이트.
+- 사실 검증 항목 끝에는 반드시 (출처: [제목](URL)) 형식으로 출처를 표시. 신뢰할 출처가 없으면 (출처 없음)이라고 쓸 것.
+- 검증이 아닌 일반 안내·요약은 출처 없이 간결하게 답해도 됨.
+
+판단 기준:
+- 날짜·수치는 직접 대조. 대략적 표현이 범위 안이면 "확인됨", 명백히 다를 때만 "확인 필요".`;
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatResult {
+  markdown: string;
+  cost: { input_tokens: number; output_tokens: number; cost_usd: number; cost_krw: number };
+}
+
+export async function runFactcheckChatStream(
+  originalText: string,
+  resultMarkdown: string,
+  messages: ChatMessage[],
+  onDelta: (text: string) => void,
+): Promise<ChatResult> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY 미설정");
+
+  const acc: CostAccumulator = { usd: 0, input_tokens: 0, output_tokens: 0 };
+  const contextBlock = `${
+    originalText.trim() ? `[원본 원고]\n${originalText.trim()}\n\n` : ""
+  }[1차 팩트체크 결과]\n${resultMarkdown.trim()}`;
+  const system = `${CHAT_SYSTEM}\n\n${contextBlock}`;
+
+  const reply = await callClaudeStream(
+    apiKey,
+    HAIKU,
+    system,
+    messages.map((m) => ({ role: m.role, content: m.content })),
+    4000,
+    acc,
+    onDelta,
+    webSearchTool(3),
+  );
+
+  return {
+    markdown: sanitizeBlockedSources(reply),
+    cost: {
+      input_tokens: acc.input_tokens,
+      output_tokens: acc.output_tokens,
+      cost_usd: +acc.usd.toFixed(4),
+      cost_krw: Math.round(acc.usd * 1400),
+    },
+  };
+}
+
+const SYNTHESIS_SYSTEM = `1차 팩트체크 결과와 이후 대화로 추가 검증한 내용을 하나의 완성된 최종 보고서로 종합하십시오. 새로 웹 검색을 하지 말고, 주어진 내용만으로 정리·통합하십시오.
+
+절대 규칙:
+- 모든 출력은 반드시 한국어로 작성. 외국어 원문 그대로 출력 금지.
+- 마크다운 표 절대 사용 금지. 목록이나 문단으로 정리.
+- "미확인" 사용 금지. "확인 필요" 사용.
+- 모든 출처 링크(마크다운 [제목](URL))는 절대 삭제하지 말고 그대로 유지. 각 검증 항목 끝에 (출처: [제목](URL)) 형식 유지, 출처가 없으면 (출처 없음).
+
+종합 규칙:
+- 1차 결과와 대화에서 같은 사실이 중복되면 더 정확하고 최신인 내용으로 통합하고 중복은 제거.
+- 대화에서 새로 확인된 사실은 보고서의 알맞은 위치에 자연스럽게 통합.
+- 대화 중 1차 결과의 판정이 바뀐 부분이 있으면 최종 판정으로 갱신.
+- 맨 위 제목(## ...)은 유지하거나 자연스럽게 다듬되, 전체는 하나의 정돈된 보고서 형태로.`;
+
+export async function runSynthesisStream(
+  originalText: string,
+  resultMarkdown: string,
+  messages: ChatMessage[],
+  onDelta: (text: string) => void,
+): Promise<ChatResult> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new Error("ANTHROPIC_API_KEY 미설정");
+
+  const acc: CostAccumulator = { usd: 0, input_tokens: 0, output_tokens: 0 };
+  const convo = messages
+    .map((m) => `${m.role === "user" ? "질문" : "답변"}: ${m.content}`)
+    .join("\n\n");
+  const userMsg = `${
+    originalText.trim() ? `[원본 원고]\n${originalText.trim()}\n\n` : ""
+  }[1차 팩트체크 결과]\n${resultMarkdown.trim()}\n\n[추가 대화 검증]\n${convo}\n\n위 내용을 하나의 완성된 최종 보고서로 종합해주십시오.`;
+
+  const md = await callClaudeStream(
+    apiKey,
+    HAIKU,
+    SYNTHESIS_SYSTEM,
+    [{ role: "user", content: userMsg }],
+    8000,
+    acc,
+    onDelta,
+  );
+
+  return {
+    markdown: sanitizeBlockedSources(md),
     cost: {
       input_tokens: acc.input_tokens,
       output_tokens: acc.output_tokens,
