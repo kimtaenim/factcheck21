@@ -31,6 +31,7 @@ export default function HomePage() {
   const [shareUrl, setShareUrl] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<RecentSummary[]>([]);
+  const [fxRate, setFxRate] = useState<number | null>(null);
   const liveRef = useRef<HTMLDivElement>(null);
 
   // 대화형 추가 팩트체크 (FactChat 컴포넌트로 분리)
@@ -63,6 +64,15 @@ export default function HomePage() {
   useEffect(() => {
     refreshRecent();
   }, [refreshRecent]);
+
+  useEffect(() => {
+    fetch("/api/fx", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        if (typeof d?.rate === "number") setFxRate(d.rate);
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (running && liveRef.current) {
@@ -224,7 +234,8 @@ export default function HomePage() {
             <p className="mt-3 text-center text-[13px] text-red-600">{error}</p>
           )}
           <p className="mt-3 text-center text-[11px] text-zinc-400">
-            웹 검색 + Haiku/Sonnet 호출. 환율 1 USD = ₩1,400 기준 비용 표시.
+            웹 검색 + Haiku/Sonnet 호출. 환율 1 USD = ₩
+            {(fxRate ?? 1400).toLocaleString()} 기준 비용 표시. (매일 갱신)
           </p>
         </section>
 

@@ -1,3 +1,4 @@
+import { getUsdKrwRate } from "./cache";
 import { BLOCKED_SOURCE_DOMAINS, sanitizeBlockedSources } from "./sources";
 
 const HAIKU = "claude-haiku-4-5-20251001";
@@ -283,6 +284,7 @@ export async function runFactcheckStream(
     retried = true;
   }
 
+  const usdKrw = await getUsdKrwRate();
   return {
     markdown: sanitizeBlockedSources(markdown),
     retried,
@@ -290,7 +292,7 @@ export async function runFactcheckStream(
       input_tokens: acc.input_tokens,
       output_tokens: acc.output_tokens,
       cost_usd: +acc.usd.toFixed(4),
-      cost_krw: Math.round(acc.usd * 1400),
+      cost_krw: Math.round(acc.usd * usdKrw),
     },
   };
 }
@@ -348,13 +350,14 @@ export async function runFactcheckChatStream(
     webSearchTool(3),
   );
 
+  const usdKrw = await getUsdKrwRate();
   return {
     markdown: sanitizeBlockedSources(reply),
     cost: {
       input_tokens: acc.input_tokens,
       output_tokens: acc.output_tokens,
       cost_usd: +acc.usd.toFixed(4),
-      cost_krw: Math.round(acc.usd * 1400),
+      cost_krw: Math.round(acc.usd * usdKrw),
     },
   };
 }
@@ -400,13 +403,14 @@ export async function runSynthesisStream(
     onDelta,
   );
 
+  const usdKrw = await getUsdKrwRate();
   return {
     markdown: sanitizeBlockedSources(md),
     cost: {
       input_tokens: acc.input_tokens,
       output_tokens: acc.output_tokens,
       cost_usd: +acc.usd.toFixed(4),
-      cost_krw: Math.round(acc.usd * 1400),
+      cost_krw: Math.round(acc.usd * usdKrw),
     },
   };
 }

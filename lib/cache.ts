@@ -25,6 +25,65 @@ function getRedis(): Redis | null {
 
 const recordKey = (id: string) => `sisain:factcheck:item:${id}`;
 const recentKey = "sisain:factcheck:recent";
+const fxKey = "sisain:factcheck:fx:usdkrw";
+
+/** 환율 미설정·조회 실패 시 사용하는 기본 USD→KRW */
+export const DEFAULT_USD_KRW = 1400;
+
+interface FxRate {
+  rate: number;
+  date: string;
+  updatedAt: number;
+}
+
+const G2 = globalThis as unknown as { __fcFx?: { value: FxRate | null; at: number } };
+const fxMem = G2.__fcFx ?? (G2.__fcFx = { value: null, at: 0 });
+const FX_MEM_TTL_MS = 60_000;
+
+/** 저장된 USD→KRW 환율을 읽어온다. 없거나 실패하면 기본값(1400). 60초 메모리 캐시. */
+export async function getUsdKrwRate(): Promise<number> {
+  const now = Date.now();
+  if (fxMem.value && now - fxMem.at < FX_MEM_TTL_MS) return fxMem.value.rate;
+  const r = getRedis();
+  try {
+    if (r) {
+      const raw = await r.get<string | FxRate>(fxKey);
+      if (raw) {
+        const fx = typeof raw === "string" ? (JSON.parse(raw) as FxRate) : raw;
+        if (fx?.rate && Number.isFinite(fx.rate)) {
+          fxMem.value = fx;
+          fxMem.at = now;
+          return fx.rate;
+        }
+      }
+    } else if (fxMem.value) {
+      return fxMem.value.rate;
+    }
+  } catch {}
+  return DEFAULT_USD_KRW;
+}
+
+/** 갱신된 USD→KRW 환율을 저장한다. */
+export async function setUsdKrwRate(rate: number, date: string): Promise<void> {
+  const fx: FxRate = { rate, date, updatedAt: Date.now() };
+  fxMem.value = fx;
+  fxMem.at = Date.now();
+  const r = getRedis();
+  if (r) await r.set(fxKey, JSON.stringify(fx));
+}
+
+/** 저장된 환율 메타데이터(없으면 null) */
+export async function getFxMeta(): Promise<FxRate | null> {
+  const r = getRedis();
+  try {
+    if (r) {
+      const raw = await r.get<string | FxRate>(fxKey);
+      if (raw) return typeof raw === "string" ? (JSON.parse(raw) as FxRate) : raw;
+      return null;
+    }
+  } catch {}
+  return fxMem.value;
+}
 
 function toSummary(record: FactcheckRecord): RecentSummary {
   const preview = record.markdown
