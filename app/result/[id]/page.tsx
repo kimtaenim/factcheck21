@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { use, useEffect, useState } from "react";
 import { CopyButton } from "@/components/CopyButton";
+import { FactChat } from "@/components/FactChat";
 import { FactMarkdown } from "@/components/FactMarkdown";
 import { Card } from "@/components/ui/Card";
 import type { FactcheckRecord } from "@/lib/types";
@@ -84,6 +85,11 @@ export default function ResultPage({ params }: PageProps) {
                     추가 검증 포함
                   </span>
                 )}
+                {record.synthesized && (
+                  <span className="rounded-full bg-mint-50 px-2 py-0.5 text-[11px] text-mint-700 ring-1 ring-mint-100">
+                    대화 종합본
+                  </span>
+                )}
                 <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] text-zinc-500">
                   ₩{record.cost.cost_krw.toLocaleString()}
                 </span>
@@ -97,6 +103,18 @@ export default function ResultPage({ params }: PageProps) {
             <Card padding="lg">
               <FactMarkdown markdown={record.markdown} />
             </Card>
+
+            <section className="mt-8">
+              <FactChat
+                factId={record.id}
+                baseMarkdown={record.markdown}
+                onSynthesized={(md, cost) =>
+                  setRecord((prev) =>
+                    prev ? { ...prev, markdown: md, cost, synthesized: true } : prev,
+                  )
+                }
+              />
+            </section>
           </>
         )}
       </main>
