@@ -2,11 +2,11 @@ import { getUsdKrwRate } from "./cache";
 import { BLOCKED_SOURCE_DOMAINS, sanitizeBlockedSources } from "./sources";
 
 const HAIKU = "claude-haiku-4-5-20251001";
-const SONNET = "claude-sonnet-4-20250514";
+const OPUS = "claude-opus-4-8";
 
 const PRICE: Record<string, { in: number; out: number }> = {
-  [HAIKU]: { in: 0.8, out: 4 },
-  [SONNET]: { in: 3, out: 15 },
+  [HAIKU]: { in: 1, out: 5 },
+  [OPUS]: { in: 5, out: 25 },
 };
 const WEB_SEARCH_USD = 0.01; // $10 / 1,000 검색
 
@@ -239,11 +239,11 @@ export async function runFactcheckStream(
     webSearchTool(3),
   );
 
-  // 2단계: 결과 정리 (Sonnet, 스트리밍)
+  // 2단계: 결과 정리 (Opus, 스트리밍)
   h.onStatus("결과 정리 중…");
   let markdown = await callClaudeStream(
     apiKey,
-    SONNET,
+    OPUS,
     FACTCHECK_FORMAT_SYSTEM,
     [{ role: "user", content: `"## ${heading}"를 제목으로 다음 팩트체크 결과를 정리해주십시오:\n\n${raw}` }],
     8000,
@@ -273,7 +273,7 @@ export async function runFactcheckStream(
     h.onDelta("\n\n");
     const retryFmt = await callClaudeStream(
       apiKey,
-      SONNET,
+      OPUS,
       FACTCHECK_FORMAT_SYSTEM,
       [{ role: "user", content: `"## 추가 검증 결과"를 제목으로 다음 팩트체크 결과를 정리해주십시오:\n\n${retryRaw}` }],
       8000,
