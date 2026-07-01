@@ -103,18 +103,46 @@ function toSummary(record: FactcheckRecord): RecentSummary {
   };
 }
 
-export async function saveFactcheck(record: FactcheckRecord): Promise<void> {
+/**
+ * 레코드 본문만 저장한다(공유 링크·대화·종합 기능용).
+ * "최근 결과" 목록에는 넣지 않는다 — 사용자가 저장을 확인해야 목록에 남는다.
+ */
+export async function persistRecord(record: FactcheckRecord): Promise<void> {
   const r = getRedis();
-  const summary = toSummary(record);
   if (r) {
     await r.set(recordKey(record.id), JSON.stringify(record), { ex: TTL_SECONDS });
-    await r.lpush(recentKey, JSON.stringify(summary));
-    await r.ltrim(recentKey, 0, MAX_HISTORY - 1);
     return;
   }
   memRecords.set(record.id, record);
-  memOrder.unshift(record.id);
-  while (memOrder.length > MAX_HISTORY) memOrder.pop();
+}
+
+/**
+ * 사용자가 '저장'을 확인했을 때만 최근 목록에 추가한다.
+ * 이미 있으면 최신 요약으로 갱신(중복 방지). 레코드가 없으면 false.
+ */
+export async function addToRecent(id: string): Promise<boolean> {
+  const record = await loadFactcheck(id);
+  if (!record) return false;
+  const summary = toSummary(record);
+  const r = getRedis();
+  if (r) {
+    const list = (await r.lrange(recentKey, 0, MAX_HISTORY - 1)) as Array<string | RecentSummary>;
+    const idx = list
+      .map((v) => (typeof v === "string" ? (JSON.parse(v) as RecentSummary) : v))
+      .findIndex((s) => s.id === id);
+    if (idx >= 0) {
+      await r.lset(recentKey, idx, JSON.stringify(summary));
+    } else {
+      await r.lpush(recentKey, JSON.stringify(summary));
+      await r.ltrim(recentKey, 0, MAX_HISTORY - 1);
+    }
+    return true;
+  }
+  if (!memOrder.includes(id)) {
+    memOrder.unshift(id);
+    while (memOrder.length > MAX_HISTORY) memOrder.pop();
+  }
+  return true;
 }
 
 export async function updateFactcheck(record: FactcheckRecord): Promise<void> {

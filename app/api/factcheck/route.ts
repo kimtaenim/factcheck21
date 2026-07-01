@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { v4 as uuid } from "uuid";
 import { z } from "zod";
-import { saveFactcheck } from "@/lib/cache";
+import { persistRecord } from "@/lib/cache";
 import { runFactcheckStream } from "@/lib/factcheck";
 import type { FactcheckRecord } from "@/lib/types";
 
@@ -62,7 +62,7 @@ export async function POST(req: Request) {
           retried: result.retried,
           cost: result.cost,
         };
-        await saveFactcheck(record);
+        await persistRecord(record);
         send({
           type: "done",
           id: record.id,

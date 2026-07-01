@@ -29,6 +29,8 @@ export default function HomePage() {
   const [live, setLive] = useState("");
   const [result, setResult] = useState<DoneResult | null>(null);
   const [shareUrl, setShareUrl] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [recent, setRecent] = useState<RecentSummary[]>([]);
   const [fxRate, setFxRate] = useState<number | null>(null);
@@ -88,6 +90,7 @@ export default function HomePage() {
     setLive("");
     setResult(null);
     setShareUrl("");
+    setSaved(false);
     setRanText(text.trim());
     setSynthesized(false);
     try {
@@ -161,6 +164,20 @@ export default function HomePage() {
     } finally {
       setRunning(false);
       setStatus("");
+    }
+  };
+
+  const onSave = async () => {
+    if (!result || saving || saved) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/factcheck/${result.id}/save`, { method: "POST" });
+      if (res.ok) {
+        setSaved(true);
+        refreshRecent();
+      }
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -266,7 +283,19 @@ export default function HomePage() {
                       ₩{result.cost.cost_krw.toLocaleString()}
                     </span>
                   </div>
-                  <div className="mb-5 flex flex-wrap gap-2">
+                  <div className="mb-2 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={onSave}
+                      disabled={saving || saved}
+                      className={
+                        saved
+                          ? "inline-flex items-center gap-1.5 rounded-2xl bg-mint-50 px-4 py-2 text-[13px] font-medium text-mint-700 ring-1 ring-mint-200"
+                          : "inline-flex items-center gap-1.5 rounded-2xl bg-mint-400 px-4 py-2 text-[13px] font-medium text-white shadow-soft transition active:scale-[0.99] disabled:opacity-60"
+                      }
+                    >
+                      {saved ? "저장됨 ✓" : saving ? "저장 중…" : "저장"}
+                    </button>
                     <CopyButton text={shareUrl} label="링크 복사" copiedLabel="링크 복사됨" size="md" />
                     <CopyButton text={result.markdown} label="본문 복사" size="md" />
                     <Link
@@ -276,6 +305,11 @@ export default function HomePage() {
                       전체 페이지 열기
                     </Link>
                   </div>
+                  <p className="mb-5 text-[11px] text-zinc-400">
+                    {saved
+                      ? "최근 결과에 저장되었습니다."
+                      : "저장을 눌러야 최근 결과 목록에 남습니다. (고쳐쓰기용 재실행은 저장 안 하면 쌓이지 않아요)"}
+                  </p>
                   <FactMarkdown markdown={result.markdown} />
                 </>
               ) : (
@@ -295,6 +329,7 @@ export default function HomePage() {
               onSynthesized={(md, cost) => {
                 setResult((prev) => (prev ? { ...prev, markdown: md, cost } : prev));
                 setSynthesized(true);
+                setSaved(false);
               }}
             />
           </section>
