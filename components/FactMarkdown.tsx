@@ -39,14 +39,14 @@ function renderMarkdown(md: string): string {
   const out: string[] = [];
   let inList = false;
   for (const line of lines) {
-    if (/^#{1,6}\s+/.test(line)) {
+    const heading = line.match(/^(#{1,6})\s+(.+)/);
+    if (heading) {
       if (inList) {
         out.push("</ul>");
         inList = false;
       }
-      const m = line.match(/^(#{1,6})\s+(.+)/)!;
-      const level = m[1].length;
-      out.push(`<h${level}>${inline(m[2])}</h${level}>`);
+      const level = heading[1].length;
+      out.push(`<h${level}>${inline(heading[2])}</h${level}>`);
       continue;
     }
     if (/^\s*[-*]\s+/.test(line)) {
