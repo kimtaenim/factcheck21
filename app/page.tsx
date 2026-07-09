@@ -284,19 +284,19 @@ export default function HomePage() {
                       ₩{result.cost.cost_krw.toLocaleString()}
                     </span>
                   </div>
+                  <button
+                    type="button"
+                    onClick={onSave}
+                    disabled={saving || saved}
+                    className={
+                      saved
+                        ? "mb-3 w-full rounded-2xl bg-mint-50 px-6 py-4 text-[15px] font-semibold text-mint-700 ring-1 ring-mint-200"
+                        : "mb-3 w-full rounded-2xl bg-mint-400 px-6 py-4 text-[15px] font-semibold text-white shadow-soft transition active:scale-[0.99] disabled:opacity-60"
+                    }
+                  >
+                    {saved ? "✓ 저장됨 — 홈 목록에 남았습니다" : saving ? "저장 중…" : "★ 이 결과 저장하기"}
+                  </button>
                   <div className="mb-2 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={onSave}
-                      disabled={saving || saved}
-                      className={
-                        saved
-                          ? "inline-flex items-center gap-1.5 rounded-2xl bg-mint-50 px-4 py-2 text-[13px] font-medium text-mint-700 ring-1 ring-mint-200"
-                          : "inline-flex items-center gap-1.5 rounded-2xl bg-zinc-900 px-4 py-2 text-[13px] font-medium text-white shadow-soft transition active:scale-[0.99] disabled:opacity-60"
-                      }
-                    >
-                      {saved ? "저장됨 ✓" : saving ? "저장 중…" : "저장(목록에 남기기)"}
-                    </button>
                     <ShareButton url={shareUrl} title={result.title} size="md" />
                     <CopyButton text={shareUrl} label="링크 복사" copiedLabel="링크 복사됨" size="md" />
                     <CopyButton text={result.markdown} label="본문 복사" size="md" />
@@ -308,10 +308,9 @@ export default function HomePage() {
                     </Link>
                   </div>
                   <p className="mb-5 text-[11px] text-zinc-400">
-                    이 결과는 이미 <span className="text-zinc-500">공유 가능한 페이지로 발행</span>됐어요 — <b>공유하기</b>로 바로 보낼 수 있습니다.
                     {saved
-                      ? " 홈 ‘최근 결과’ 목록에도 저장됐습니다."
-                      : " ‘저장’을 누르면 홈 ‘최근 결과’ 목록에도 남습니다. (고쳐쓰기용 재실행은 저장 안 하면 쌓이지 않아요)"}
+                      ? "홈 ‘최근 결과’ 목록에 저장되었습니다."
+                      : "‘저장하기’를 눌러야 홈 ‘최근 결과’ 목록에 남습니다. 공유는 저장과 상관없이 언제든 가능합니다."}
                   </p>
                   <FactMarkdown markdown={result.markdown} />
                 </>

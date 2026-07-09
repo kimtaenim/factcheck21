@@ -16,10 +16,23 @@ interface Props {
 export function ResultClient({ initialRecord }: Props) {
   const [record, setRecord] = useState<FactcheckRecord | null>(initialRecord);
   const [shareUrl, setShareUrl] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setShareUrl(window.location.href);
   }, []);
+
+  const onSave = async () => {
+    if (!record || saving || saved) return;
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/factcheck/${record.id}/save`, { method: "POST" });
+      if (res.ok) setSaved(true);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <>
@@ -72,7 +85,19 @@ export function ResultClient({ initialRecord }: Props) {
                   ₩{record.cost.cost_krw.toLocaleString()}
                 </span>
               </div>
-              <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={onSave}
+                disabled={saving || saved}
+                className={
+                  saved
+                    ? "mt-4 w-full rounded-2xl bg-mint-50 px-6 py-4 text-[15px] font-semibold text-mint-700 ring-1 ring-mint-200"
+                    : "mt-4 w-full rounded-2xl bg-mint-400 px-6 py-4 text-[15px] font-semibold text-white shadow-soft transition active:scale-[0.99] disabled:opacity-60"
+                }
+              >
+                {saved ? "✓ 저장됨 — 홈 목록에 남았습니다" : saving ? "저장 중…" : "★ 이 결과 저장하기"}
+              </button>
+              <div className="mt-3 flex flex-wrap gap-2">
                 <ShareButton url={shareUrl} title={record.title} size="md" />
                 <CopyButton text={shareUrl} label="링크 복사" copiedLabel="링크 복사됨" size="md" />
                 <CopyButton text={record.markdown} label="본문 복사" size="md" />
