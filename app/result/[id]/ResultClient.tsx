@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { CopyButton } from "@/components/CopyButton";
+import { ShareButton } from "@/components/ShareButton";
 import { FactChat } from "@/components/FactChat";
 import { FactMarkdown } from "@/components/FactMarkdown";
 import { Card } from "@/components/ui/Card";
@@ -72,6 +73,7 @@ export function ResultClient({ initialRecord }: Props) {
                 </span>
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
+                <ShareButton url={shareUrl} title={record.title} size="md" />
                 <CopyButton text={shareUrl} label="링크 복사" copiedLabel="링크 복사됨" size="md" />
                 <CopyButton text={record.markdown} label="본문 복사" size="md" />
               </div>

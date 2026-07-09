@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CopyButton } from "@/components/CopyButton";
 import { FactChat } from "@/components/FactChat";
 import { FactMarkdown } from "@/components/FactMarkdown";
+import { ShareButton } from "@/components/ShareButton";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
@@ -291,24 +292,26 @@ export default function HomePage() {
                       className={
                         saved
                           ? "inline-flex items-center gap-1.5 rounded-2xl bg-mint-50 px-4 py-2 text-[13px] font-medium text-mint-700 ring-1 ring-mint-200"
-                          : "inline-flex items-center gap-1.5 rounded-2xl bg-mint-400 px-4 py-2 text-[13px] font-medium text-white shadow-soft transition active:scale-[0.99] disabled:opacity-60"
+                          : "inline-flex items-center gap-1.5 rounded-2xl bg-zinc-900 px-4 py-2 text-[13px] font-medium text-white shadow-soft transition active:scale-[0.99] disabled:opacity-60"
                       }
                     >
-                      {saved ? "저장됨 ✓" : saving ? "저장 중…" : "저장"}
+                      {saved ? "저장됨 ✓" : saving ? "저장 중…" : "저장(목록에 남기기)"}
                     </button>
+                    <ShareButton url={shareUrl} title={result.title} size="md" />
                     <CopyButton text={shareUrl} label="링크 복사" copiedLabel="링크 복사됨" size="md" />
                     <CopyButton text={result.markdown} label="본문 복사" size="md" />
                     <Link
                       href={`/result/${result.id}`}
                       className="inline-flex items-center gap-1.5 rounded-2xl bg-zinc-50 px-4 py-2 text-[13px] font-medium text-zinc-600 ring-1 ring-zinc-200 transition hover:text-zinc-900 hover:ring-zinc-300"
                     >
-                      전체 페이지 열기
+                      발행 페이지 열기
                     </Link>
                   </div>
                   <p className="mb-5 text-[11px] text-zinc-400">
+                    이 결과는 이미 <span className="text-zinc-500">공유 가능한 페이지로 발행</span>됐어요 — <b>공유하기</b>로 바로 보낼 수 있습니다.
                     {saved
-                      ? "최근 결과에 저장되었습니다."
-                      : "저장을 눌러야 최근 결과 목록에 남습니다. (고쳐쓰기용 재실행은 저장 안 하면 쌓이지 않아요)"}
+                      ? " 홈 ‘최근 결과’ 목록에도 저장됐습니다."
+                      : " ‘저장’을 누르면 홈 ‘최근 결과’ 목록에도 남습니다. (고쳐쓰기용 재실행은 저장 안 하면 쌓이지 않아요)"}
                   </p>
                   <FactMarkdown markdown={result.markdown} />
                 </>
