@@ -1,7 +1,6 @@
 import { Redis } from "@upstash/redis";
 import type { FactcheckRecord, RecentSummary } from "./types";
 
-const TTL_SECONDS = 60 * 60 * 24 * 30;
 const MAX_HISTORY = 100;
 
 let redis: Redis | null = null;
@@ -110,7 +109,8 @@ function toSummary(record: FactcheckRecord): RecentSummary {
 export async function persistRecord(record: FactcheckRecord): Promise<void> {
   const r = getRedis();
   if (r) {
-    await r.set(recordKey(record.id), JSON.stringify(record), { ex: TTL_SECONDS });
+    // 만료 없이 영구 저장 (발행된 보고서는 자동 삭제되지 않는다)
+    await r.set(recordKey(record.id), JSON.stringify(record));
     return;
   }
   memRecords.set(record.id, record);
@@ -149,7 +149,7 @@ export async function updateFactcheck(record: FactcheckRecord): Promise<void> {
   const r = getRedis();
   const summary = toSummary(record);
   if (r) {
-    await r.set(recordKey(record.id), JSON.stringify(record), { ex: TTL_SECONDS });
+    await r.set(recordKey(record.id), JSON.stringify(record));
     const list = (await r.lrange(recentKey, 0, MAX_HISTORY - 1)) as Array<string | RecentSummary>;
     const idx = list
       .map((v) => (typeof v === "string" ? (JSON.parse(v) as RecentSummary) : v))
@@ -165,9 +165,32 @@ export async function loadFactcheck(id: string): Promise<FactcheckRecord | null>
   if (r) {
     const raw = await r.get<string | FactcheckRecord>(recordKey(id));
     if (!raw) return null;
+    // 아직 옛 TTL이 남아있으면 제거해 영구 보존한다(열람만 해도 안전해짐)
+    try {
+      await r.persist(recordKey(id));
+    } catch {}
     return typeof raw === "string" ? (JSON.parse(raw) as FactcheckRecord) : raw;
   }
   return memRecords.get(id) ?? null;
+}
+
+/**
+ * 저장된 모든 결과 레코드의 만료(TTL)를 제거해 영구 보존한다.
+ * 아직 만료되지 않은 레코드만 대상(이미 삭제된 것은 복구 불가).
+ * 반환: 영구화 처리한 레코드 수.
+ */
+export async function persistAllRecords(): Promise<number> {
+  const r = getRedis();
+  if (!r) return 0;
+  const keys = await r.keys(recordKey("*"));
+  let n = 0;
+  for (const k of keys) {
+    try {
+      await r.persist(k);
+      n++;
+    } catch {}
+  }
+  return n;
 }
 
 export async function deleteFactcheck(id: string): Promise<boolean> {
