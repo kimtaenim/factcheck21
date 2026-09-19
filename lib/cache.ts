@@ -218,6 +218,29 @@ export async function deleteFactcheck(id: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * 최근 목록에서 실제 레코드가 사라진(만료된) 항목을 제거한다.
+ * 반환: 제거한 항목 수.
+ */
+export async function pruneDeadRecent(): Promise<number> {
+  const r = getRedis();
+  if (!r) return 0;
+  const list = (await r.lrange(recentKey, 0, MAX_HISTORY - 1)) as Array<string | RecentSummary>;
+  const summaries = list.map((v) => (typeof v === "string" ? (JSON.parse(v) as RecentSummary) : v));
+  const kept: RecentSummary[] = [];
+  for (const s of summaries) {
+    if (await r.exists(recordKey(s.id))) kept.push(s);
+  }
+  const removed = summaries.length - kept.length;
+  if (removed > 0) {
+    const pipe = r.multi();
+    pipe.del(recentKey);
+    if (kept.length > 0) pipe.rpush(recentKey, ...kept.map((s) => JSON.stringify(s)));
+    await pipe.exec();
+  }
+  return removed;
+}
+
 export async function listRecent(limit = MAX_HISTORY): Promise<RecentSummary[]> {
   const r = getRedis();
   if (r) {
