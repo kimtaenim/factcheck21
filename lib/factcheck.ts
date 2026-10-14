@@ -233,10 +233,10 @@ export async function runFactcheckStream(
     apiKey,
     HAIKU,
     FACTCHECK_SYSTEM,
-    `다음 원고의 팩트 요소를 추출하고 웹 검색으로 검증해주십시오:\n\n${text}`,
-    8000,
+    `다음 원고의 팩트 요소를 추출하고 웹 검색으로 검증해주십시오. 원고 처음부터 끝까지 빠짐없이 모든 팩트 요소를 다루십시오(앞부분만 하고 끝내지 말 것):\n\n${text}`,
+    16000,
     acc,
-    webSearchTool(3),
+    webSearchTool(12),
   );
 
   // 2단계: 결과 정리 (Opus, 스트리밍)
@@ -246,7 +246,7 @@ export async function runFactcheckStream(
     OPUS,
     FACTCHECK_FORMAT_SYSTEM,
     [{ role: "user", content: `"## ${heading}"를 제목으로 다음 팩트체크 결과를 정리해주십시오:\n\n${raw}` }],
-    8000,
+    12000,
     acc,
     h.onDelta,
   );
@@ -265,9 +265,9 @@ export async function runFactcheckStream(
       HAIKU,
       FACTCHECK_SYSTEM,
       `아래 팩트 요소만 집중 검증하십시오.\n\n검증 대상:\n${unverified}\n\n원고:\n${text}`,
-      4000,
+      8000,
       acc,
-      webSearchTool(5),
+      webSearchTool(8),
     );
     h.onStatus("추가 검증 결과 정리 중…");
     h.onDelta("\n\n");
