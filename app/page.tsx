@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/Textarea";
 import type { FactcheckCost, RecentSummary } from "@/lib/types";
 
 const DRAFT_KEY = "factcheck:draft";
+const PENDING_KEY = "factcheck:pending"; // 진행 중인 검증 job (창을 벗어나도 복구용)
 
 interface DoneResult {
   id: string;
@@ -33,6 +34,7 @@ export default function HomePage() {
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resuming, setResuming] = useState(false); // 진행 중 job 폴링(복구) 중
   const [recent, setRecent] = useState<RecentSummary[]>([]);
   const [fxRate, setFxRate] = useState<number | null>(null);
   const liveRef = useRef<HTMLDivElement>(null);
@@ -46,6 +48,56 @@ export default function HomePage() {
     const data = (await res.json()) as { items: RecentSummary[] };
     setRecent(data.items ?? []);
   }, []);
+
+  const clearPending = useCallback(() => {
+    try {
+      window.localStorage.removeItem(PENDING_KEY);
+    } catch {}
+  }, []);
+
+  const showRecord = useCallback(
+    (rec: DoneResult) => {
+      setResult(rec);
+      setShareUrl(`${window.location.origin}/result/${rec.id}`);
+    },
+    [],
+  );
+
+  // 진행 중이던 job을 id로 폴링해 완성되면 결과를 띄운다(창 이탈·스트림 끊김 복구).
+  const pollPending = useCallback(
+    async (id: string) => {
+      setResuming(true);
+      setError(null);
+      for (let i = 0; i < 180; i++) {
+        // 약 15분까지 5초 간격
+        try {
+          const res = await fetch(`/api/factcheck/${id}`, { cache: "no-store" });
+          if (res.ok) {
+            const rec = await res.json();
+            showRecord({
+              id: rec.id,
+              title: rec.title,
+              markdown: rec.markdown,
+              retried: rec.retried,
+              cost: rec.cost,
+            });
+            setSaved(false);
+            setRanText("");
+            setResuming(false);
+            clearPending();
+            refreshRecent();
+            return true;
+          }
+        } catch {}
+        await new Promise((r) => setTimeout(r, 5000));
+      }
+      setResuming(false);
+      clearPending();
+      setError("검증 결과를 가져오지 못했습니다. 다시 실행해 주세요.");
+      return false;
+    },
+    [showRecord, clearPending, refreshRecent],
+  );
 
   useEffect(() => {
     try {
@@ -67,6 +119,22 @@ export default function HomePage() {
   useEffect(() => {
     refreshRecent();
   }, [refreshRecent]);
+
+  // 복귀 시: 진행 중이던 job이 있으면 그 결과를 폴링해 되살린다.
+  useEffect(() => {
+    if (!hydrated) return;
+    let pending: { id?: string; at?: number } | null = null;
+    try {
+      const raw = window.localStorage.getItem(PENDING_KEY);
+      if (raw) pending = JSON.parse(raw);
+    } catch {}
+    if (pending?.id && (!pending.at || Date.now() - pending.at < 20 * 60 * 1000)) {
+      pollPending(pending.id);
+    } else if (pending) {
+      clearPending();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hydrated]);
 
   useEffect(() => {
     fetch("/api/fx", { cache: "no-store" })
@@ -114,9 +182,22 @@ export default function HomePage() {
       const decoder = new TextDecoder("utf-8");
       let buf = "";
       let acc = "";
+      let jobId: string | null = null;
+      let doneReceived = false;
+      let failed = false;
 
       const handle = (obj: Record<string, unknown>) => {
         switch (obj.type) {
+          case "started":
+            jobId = String(obj.id);
+            // 진행 중 job 기록 — 창을 벗어나거나 스트림이 끊겨도 이 id로 복구
+            try {
+              window.localStorage.setItem(
+                PENDING_KEY,
+                JSON.stringify({ id: jobId, at: Date.now() }),
+              );
+            } catch {}
+            break;
           case "status":
             setStatus(String(obj.text ?? ""));
             break;
@@ -125,17 +206,20 @@ export default function HomePage() {
             setLive(acc);
             break;
           case "error":
+            failed = true;
             setError(String(obj.error ?? "오류가 발생했습니다."));
+            clearPending();
             break;
           case "done":
-            setResult({
+            doneReceived = true;
+            showRecord({
               id: String(obj.id),
               title: String(obj.title),
               markdown: String(obj.markdown),
               retried: Boolean(obj.retried),
               cost: obj.cost as FactcheckCost,
             });
-            setShareUrl(`${window.location.origin}/result/${obj.id}`);
+            clearPending();
             refreshRecent();
             break;
         }
@@ -160,7 +244,27 @@ export default function HomePage() {
           handle(JSON.parse(buf.trim()));
         } catch {}
       }
+
+      // 스트림이 'done' 없이 끊겼지만 서버는 계속 돌고 있을 수 있다 → id로 결과 폴링
+      if (!doneReceived && !failed && jobId) {
+        setRunning(false);
+        setStatus("");
+        await pollPending(jobId);
+        return;
+      }
     } catch (err) {
+      // 네트워크/스트림 끊김: 진행 중 job이 있으면 폴링으로 복구 시도
+      let pendingId: string | null = null;
+      try {
+        const raw = window.localStorage.getItem(PENDING_KEY);
+        if (raw) pendingId = (JSON.parse(raw) as { id?: string }).id ?? null;
+      } catch {}
+      if (pendingId) {
+        setRunning(false);
+        setStatus("");
+        await pollPending(pendingId);
+        return;
+      }
       setError(err instanceof Error ? err.message : "네트워크 오류");
     } finally {
       setRunning(false);
@@ -189,7 +293,7 @@ export default function HomePage() {
     if (!res.ok) setRecent(before);
   };
 
-  const showPanel = running || !!result;
+  const showPanel = running || resuming || !!result;
 
   return (
     <>
@@ -243,11 +347,16 @@ export default function HomePage() {
           <button
             type="button"
             onClick={run}
-            disabled={!text.trim() || running}
+            disabled={!text.trim() || running || resuming}
             className="w-full rounded-3xl bg-mint-400 px-6 py-5 text-[16px] font-medium text-white shadow-soft transition active:scale-[0.99] disabled:opacity-50 sm:text-[17px]"
           >
-            {running ? "검증 중…" : "팩트체크 실행"}
+            {running ? "검증 중…" : resuming ? "진행 중인 검증 불러오는 중…" : "팩트체크 실행"}
           </button>
+          {(running || resuming) && (
+            <p className="mt-3 text-center text-[12px] text-mint-700">
+              다른 창·앱에 다녀오셔도 됩니다. 검증은 서버에서 끝까지 진행되고, 돌아오면 결과가 복구됩니다.
+            </p>
+          )}
           {error && (
             <p className="mt-3 text-center text-[13px] text-red-600">{error}</p>
           )}
@@ -264,6 +373,12 @@ export default function HomePage() {
                 <p className="mb-4 flex items-center gap-2 text-[13px] font-medium text-mint-700">
                   <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-mint-500" />
                   {status || "처리 중…"}
+                </p>
+              )}
+              {resuming && !result && (
+                <p className="mb-4 flex items-center gap-2 text-[13px] font-medium text-mint-700">
+                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-mint-500" />
+                  진행 중이던 검증 결과를 불러오는 중… (완료되는 대로 표시됩니다)
                 </p>
               )}
 

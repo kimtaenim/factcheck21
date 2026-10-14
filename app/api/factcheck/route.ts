@@ -36,16 +36,30 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "원고를 입력해주세요." }, { status: 400 });
   }
 
+  // 결과 id를 미리 발급 — 클라이언트가 창을 벗어나 스트림이 끊겨도
+  // 서버는 끝까지 돌려 이 id로 저장하고, 클라이언트는 이 id로 결과를 폴링해 복구한다.
+  const id = uuid();
+  const title = parsed.data.title?.trim() || "원고 팩트 검증 결과";
+
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
+      // 클라이언트 연결이 끊겨도(enqueue 실패) 예외를 삼키고 작업은 끝까지 진행한다.
+      let clientGone = false;
       const send = (obj: unknown) => {
-        controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+        if (clientGone) return;
+        try {
+          controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n"));
+        } catch {
+          clientGone = true;
+        }
       };
       try {
+        // 시작 즉시 id 전달 — 클라이언트가 저장해 두고 나중에 폴링 가능
+        send({ type: "started", id });
         const result = await runFactcheckStream(
           parsed.data.text,
-          parsed.data.title ?? "",
+          title,
           {
             onStatus: (text) => send({ type: "status", text }),
             onDelta: (text) => send({ type: "delta", text }),
@@ -53,8 +67,8 @@ export async function POST(req: Request) {
         );
         const { dateKst, timeKst } = kstParts();
         const record: FactcheckRecord = {
-          id: uuid(),
-          title: parsed.data.title?.trim() || "원고 팩트 검증 결과",
+          id,
+          title,
           markdown: result.markdown,
           createdAt: new Date().toISOString(),
           dateKst,
@@ -62,6 +76,7 @@ export async function POST(req: Request) {
           retried: result.retried,
           cost: result.cost,
         };
+        // 클라이언트 연결 여부와 무관하게 저장(핵심: 창을 벗어나도 결과 보존)
         await persistRecord(record);
         send({
           type: "done",
@@ -76,7 +91,9 @@ export async function POST(req: Request) {
       } catch (err) {
         send({ type: "error", error: err instanceof Error ? err.message : String(err) });
       } finally {
-        controller.close();
+        try {
+          controller.close();
+        } catch {}
       }
     },
   });
