@@ -1,13 +1,47 @@
 // 팩트체크 출처로 쓰면 안 되는 도메인. web_search 차단 + 렌더 단계 필터 양쪽에서 사용.
 // 하위 도메인은 자동 포함 (예: blog.naver.com → m.blog.naver.com 도 차단).
 export const BLOCKED_SOURCE_DOMAINS = [
+  // 나무위키 및 미러·파생 위키
   "namu.wiki",
+  "namu.moe",
+  "namu.mirror.wiki",
+  "theseed.io",
+  "rigvedawiki.net",
+  "librewiki.net",
+  "alphawiki.org",
+  "wikiwand.com",
+  // 팬덤·밀덕 위키 및 취미 사이트
+  "fandom.com",
+  "wikia.com",
+  "wikia.org",
+  "militaryfactory.com",
+  "military-today.com",
+  "warhistoryonline.com",
+  "weaponsandwarfare.com",
+  "milpedia.org",
+  // 블로그·카페·Q&A
   "blog.naver.com",
   "post.naver.com",
   "cafe.naver.com",
   "kin.naver.com",
   "cafe.daum.net",
   "blog.daum.net",
+  "tistory.com",
+  "brunch.co.kr",
+  "velog.io",
+  "medium.com",
+  "quora.com",
+  // 커뮤니티
+  "reddit.com",
+  "dcinside.com",
+  "fmkorea.com",
+  "theqoo.net",
+  "ruliweb.com",
+  "clien.net",
+  "arca.live",
+  "mlbpark.donga.com",
+  "ppomppu.co.kr",
+  "instiz.net",
 ];
 
 export function isBlockedSourceUrl(rawUrl: string): boolean {
@@ -31,5 +65,9 @@ export function sanitizeBlockedSources(markdown: string): string {
     isBlockedSourceUrl(url) ? text : full,
   );
   out = out.replace(BARE_URL, (url) => (isBlockedSourceUrl(url) ? "" : url));
+  // 링크 없는 출처 표기("출처: 영문 위키백과 및 학술 기관 등")는 출처로 인정하지 않는다.
+  out = out.replace(/\(출처:\s*(?:[^()]|\([^()]*\))*\)/g, (full) =>
+    /https?:\/\//.test(full) ? full : "(출처 없음)",
+  );
   return out;
 }
