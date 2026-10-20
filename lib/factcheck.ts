@@ -1,5 +1,10 @@
 import { getUsdKrwRate } from "./cache";
-import { BLOCKED_SOURCE_DOMAINS, sanitizeBlockedSources } from "./sources";
+import {
+  BLOCKED_SOURCE_DOMAINS,
+  TRUSTED_SOURCE_DOMAINS,
+  TRUSTED_SOURCE_DOMAINS_STRICT,
+  sanitizeBlockedSources,
+} from "./sources";
 
 const HAIKU = "claude-haiku-4-5-20251001";
 const OPUS = "claude-opus-4-8";
@@ -19,7 +24,7 @@ const FACTCHECK_SYSTEM = `원고에서 수치/통계, 인명, 날짜, 사건, �
 
 검색 규칙:
 - 가장 중요한 팩트부터 우선 검증.
-- 출처 우선순위: 1차 출처(정부·공식기관·통계·학술 논문·대학/학술 출판사) > 주요 언론사 > 영어판 위키피디아(en.wikipedia.org). 위키피디아는 영어판만 사용. 검색어는 영어로 작성하되 결과는 한국어로 번역.
+- 공신력 있는 출처만 사용: 정부·공공기관·공식 통계, 학술 논문·학술 출판사·대학, 국제기구·연구소, 통신사·주요 언론사, 영어판 위키피디아(en.wikipedia.org). 우선순위는 1차 출처(정부·공식기관·통계·논문) > 주요 언론사 > 영어판 위키피디아. 검색어는 영어로 작성하되 결과는 한국어로 번역.
 - 다음 출처는 절대 사용 금지: 나무위키(namu.wiki)와 그 미러·파생 위키, 위키백과 미러(wikiwand 등), 팬덤 위키(fandom·wikia), 밀리터리 취미·밀덕 사이트와 군사 위키류, 네이버 블로그·포스트·카페·지식iN, 다음 카페·블로그, 티스토리·브런치 등 개인 블로그, 레딧·디시인사이드 등 커뮤니티.
 - 출처는 실제로 web_search 결과로 받은 페이지의 URL만 인용. 열어 보지 않은 출처나 기관·출판사 이름만 대는 것 금지.
 - "영문 위키백과 및 신뢰할 수 있는 학술 기관 등의 출처를 기반으로 작성" 같은 링크 없는 뭉뚱그린 출처 표기 금지. 항목마다 구체적 URL을 달 것.
@@ -45,7 +50,8 @@ const FACTCHECK_FORMAT_SYSTEM = `팩트체크 결과를 정리하십시오.
 - 출처 URL은 마크다운 링크로 반드시 유지. 원본의 URL을 절대 삭제하지 마십시오.
 - 각 검증 항목 끝에 반드시 (출처: [제목](URL)) 형식으로 출처를 표시하십시오. URL이 없으면 (출처 없음)이라고 쓰십시오.
 - 외국어 본문은 한국어로 번역하되, URL 링크는 원본 그대로 유지하십시오.
-- 링크 없는 뭉뚱그린 출처 표기("영문 위키백과 및 학술 기관 등을 기반으로 작성" 등)를 새로 만들지 마십시오.`;
+- 링크 없는 뭉뚱그린 출처 표기("영문 위키백과 및 학술 기관 등을 기반으로 작성" 등)를 새로 만들지 마십시오.
+- 출처 URL은 원본에 있는 URL(특히 [검색으로 실제 확인한 출처] 목록)만 사용. 없는 URL을 지어내지 마십시오.`;
 
 interface CostAccumulator {
   usd: number;
@@ -87,7 +93,11 @@ async function callClaude(
   });
 
   const data = await resp.json();
-  if (data.error) throw new Error(data.error.message || "Anthropic API 오류");
+  if (data.error) {
+    const msg = data.error.message || "Anthropic API 오류";
+    if (tools && resp.status === 400 && isDomainFilterRejection(msg)) throw new SearchFilterError(msg);
+    throw new Error(msg);
+  }
 
   const usage: ClaudeUsage = data.usage ?? {};
   const price = PRICE[model] ?? { in: 0, out: 0 };
@@ -98,10 +108,46 @@ async function callClaude(
   acc.usd += (inTok * price.in + outTok * price.out) / 1_000_000;
   acc.usd += (usage.server_tool_use?.web_search_requests ?? 0) * WEB_SEARCH_USD;
 
-  return (data.content ?? [])
-    .filter((b: { type: string }) => b.type === "text")
-    .map((b: { text: string }) => b.text)
+  const content: ContentBlock[] = data.content ?? [];
+  if (content.some(isFilterTooLargeError)) throw new SearchFilterError("request_too_large");
+
+  const text = content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text ?? "")
     .join("");
+
+  // 본문에 URL이 빠져도 정리 단계에서 실제 출처를 쓸 수 있도록, 모델이 인용한 검색 결과를 붙인다.
+  const cited = new Map<string, string>();
+  for (const b of content) {
+    for (const c of b.citations ?? []) {
+      if (c.url && !cited.has(c.url)) cited.set(c.url, c.title || c.url);
+    }
+  }
+  if (cited.size === 0) return text;
+  const list = [...cited].map(([url, title]) => `- [${title}](${url})`).join("\n");
+  return `${text}\n\n[검색으로 실제 확인한 출처]\n${list}`;
+}
+
+interface ContentBlock {
+  type: string;
+  text?: string;
+  citations?: { url?: string; title?: string }[];
+  content?: { type?: string; error_code?: string } | unknown[];
+}
+
+function isFilterTooLargeError(b: ContentBlock): boolean {
+  return (
+    b.type === "web_search_tool_result" &&
+    !Array.isArray(b.content) &&
+    b.content?.error_code === "request_too_large"
+  );
+}
+
+// 허용 목록 검색이 API에서 거부됐을 때(도메인 형식 400, 목록 과대) 대체 목록으로 재시도하기 위한 오류.
+class SearchFilterError extends Error {}
+
+function isDomainFilterRejection(message: string): boolean {
+  return /domain/i.test(message);
 }
 
 async function callClaudeStream(
@@ -139,6 +185,9 @@ async function callClaudeStream(
       const j = await resp.json();
       if (j?.error?.message) errText = j.error.message;
     } catch {}
+    if (tools && resp.status === 400 && isDomainFilterRejection(errText)) {
+      throw new SearchFilterError(errText);
+    }
     throw new Error(errText);
   }
 
@@ -199,14 +248,35 @@ async function callClaudeStream(
   return full;
 }
 
-const webSearchTool = (maxUses: number) => [
+// 검색 도메인 필터 단계: 허용 목록 → 공공 접미사 뺀 허용 목록 → (최후) 차단 목록.
+const SEARCH_FILTERS: Record<string, string[]>[] = [
+  { allowed_domains: TRUSTED_SOURCE_DOMAINS },
+  { allowed_domains: TRUSTED_SOURCE_DOMAINS_STRICT },
+  { blocked_domains: BLOCKED_SOURCE_DOMAINS },
+];
+
+const webSearchTool = (maxUses: number, level = 0) => [
   {
     type: "web_search_20250305",
     name: "web_search",
     max_uses: maxUses,
-    blocked_domains: BLOCKED_SOURCE_DOMAINS,
+    ...SEARCH_FILTERS[level],
   },
 ];
+
+async function withSearchFallback<T>(
+  maxUses: number,
+  run: (tools: unknown[]) => Promise<T>,
+): Promise<T> {
+  for (let level = 0; ; level++) {
+    try {
+      return await run(webSearchTool(maxUses, level));
+    } catch (e) {
+      if (!(e instanceof SearchFilterError) || level >= SEARCH_FILTERS.length - 1) throw e;
+      console.warn(`[factcheck] 검색 도메인 필터 거부(${e.message}) → 대체 목록으로 재시도`);
+    }
+  }
+}
 
 export interface FactcheckResult {
   markdown: string;
@@ -232,14 +302,16 @@ export async function runFactcheckStream(
 
   // 1단계: 팩트 추출 + 웹 검색 검증 (Haiku)
   h.onStatus("웹에서 사실 확인 중…");
-  const raw = await callClaude(
-    apiKey,
-    HAIKU,
-    FACTCHECK_SYSTEM,
-    `다음 원고의 팩트 요소를 추출하고 웹 검색으로 검증해주십시오. 원고 처음부터 끝까지 빠짐없이 모든 팩트 요소를 다루십시오(앞부분만 하고 끝내지 말 것):\n\n${text}`,
-    16000,
-    acc,
-    webSearchTool(12),
+  const raw = await withSearchFallback(12, (tools) =>
+    callClaude(
+      apiKey,
+      HAIKU,
+      FACTCHECK_SYSTEM,
+      `다음 원고의 팩트 요소를 추출하고 웹 검색으로 검증해주십시오. 원고 처음부터 끝까지 빠짐없이 모든 팩트 요소를 다루십시오(앞부분만 하고 끝내지 말 것):\n\n${text}`,
+      16000,
+      acc,
+      tools,
+    ),
   );
 
   // 2단계: 결과 정리 (Opus, 스트리밍)
@@ -263,14 +335,16 @@ export async function runFactcheckStream(
 
   if (unverified.trim()) {
     h.onStatus("'확인 필요' 항목 추가 검증 중…");
-    const retryRaw = await callClaude(
-      apiKey,
-      HAIKU,
-      FACTCHECK_SYSTEM,
-      `아래 팩트 요소만 집중 검증하십시오.\n\n검증 대상:\n${unverified}\n\n원고:\n${text}`,
-      8000,
-      acc,
-      webSearchTool(8),
+    const retryRaw = await withSearchFallback(8, (tools) =>
+      callClaude(
+        apiKey,
+        HAIKU,
+        FACTCHECK_SYSTEM,
+        `아래 팩트 요소만 집중 검증하십시오.\n\n검증 대상:\n${unverified}\n\n원고:\n${text}`,
+        8000,
+        acc,
+        tools,
+      ),
     );
     h.onStatus("추가 검증 결과 정리 중…");
     h.onDelta("\n\n");
@@ -309,7 +383,7 @@ const CHAT_SYSTEM = `당신은 원고 팩트체크를 돕는 대화형 어시스
 
 검색·출처 규칙:
 - 새로운 사실 주장은 web_search로 검증. 검색어는 영어로 작성하되 결과는 한국어로 번역.
-- 출처 우선순위: 1차 출처(정부·공식기관·통계·학술 논문·대학/학술 출판사) > 주요 언론사 > 영어판 위키피디아(en.wikipedia.org). 위키피디아는 영어판만 사용.
+- 공신력 있는 출처만 사용: 정부·공공기관·공식 통계, 학술 논문·학술 출판사·대학, 국제기구·연구소, 통신사·주요 언론사, 영어판 위키피디아(en.wikipedia.org). 우선순위는 1차 출처(정부·공식기관·통계·논문) > 주요 언론사 > 영어판 위키피디아.
 - 다음 출처는 절대 사용 금지: 나무위키(namu.wiki)와 그 미러·파생 위키, 위키백과 미러(wikiwand 등), 팬덤 위키(fandom·wikia), 밀리터리 취미·밀덕 사이트와 군사 위키류, 네이버 블로그·포스트·카페·지식iN, 다음 카페·블로그, 티스토리·브런치 등 개인 블로그, 레딧·디시인사이드 등 커뮤니티.
 - 출처는 실제로 web_search 결과로 받은 페이지의 URL만 인용. 열어 보지 않은 출처나 기관·출판사 이름만 대는 것 금지.
 - "영문 위키백과 및 신뢰할 수 있는 학술 기관 등의 출처를 기반으로 작성" 같은 링크 없는 뭉뚱그린 출처 표기 금지. 항목마다 구체적 URL을 달 것.
@@ -344,15 +418,17 @@ export async function runFactcheckChatStream(
   }[1차 팩트체크 결과]\n${resultMarkdown.trim()}`;
   const system = `${CHAT_SYSTEM}\n\n${contextBlock}`;
 
-  const reply = await callClaudeStream(
-    apiKey,
-    HAIKU,
-    system,
-    messages.map((m) => ({ role: m.role, content: m.content })),
-    4000,
-    acc,
-    onDelta,
-    webSearchTool(3),
+  const reply = await withSearchFallback(3, (tools) =>
+    callClaudeStream(
+      apiKey,
+      HAIKU,
+      system,
+      messages.map((m) => ({ role: m.role, content: m.content })),
+      4000,
+      acc,
+      onDelta,
+      tools,
+    ),
   );
 
   const usdKrw = await getUsdKrwRate();
