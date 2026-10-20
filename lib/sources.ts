@@ -2,8 +2,8 @@
 // 렌더 단계에서도 여기(및 공공·학술 도메인 접미사)에 없는 링크는 출처로 인정하지 않는다.
 // 하위 도메인은 자동 포함. 특정 하위 도메인을 적으면 그 하위 도메인만 허용.
 export const TRUSTED_SOURCE_DOMAINS = [
-  // 위키피디아는 영어판만
-  "en.wikipedia.org",
+  // 위키백과 (모든 언어판)
+  "wikipedia.org",
   // 백과사전·학술 데이터베이스·학술 출판
   "britannica.com",
   "oxfordreference.com",
